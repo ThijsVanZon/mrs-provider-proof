@@ -1,0 +1,28 @@
+{
+  "format": 1,
+  "repository": "ThijsVanZon/mrs-provider-proof",
+  "applicability": "lifecycle",
+  "shared": {
+    "repository": "ThijsVanZon/multi-repo-stack",
+    "commit": "ffa9febec8bb97f4a07f828073ae452b1ff34800"
+  },
+  "checks": {
+    "smoke": {
+      "argv": [
+        "python",
+        "-I",
+        "-B",
+        "smoke.py"
+      ],
+      "environments": [
+        "windows"
+      ],
+      "evidence_required": false
+    }
+  },
+  "environments": {
+    "windows": {
+      "os": "windows"
+    }
+  }
+}
