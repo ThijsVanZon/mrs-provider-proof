@@ -1,0 +1,104 @@
+# PROPOSED, NOT PUBLISHED. One fresh Claude Code entry plus one resumed turn on a GitHub-hosted native macOS runner,
+# for multi-repo-stack at exact C. It runs only if the owner separately grants pushing the exact commit that holds
+# this file to the named branch of the chosen external repository. It reads public sources over https, writes only
+# runner-local scratch and one workflow artifact, and never pushes, tags, comments or releases. A successful run means
+# the evidence was collected and its setup and transcript checks hold; it does not show that the session ran preflight
+# or read the routed files. The final verifier judges that from the raw transcripts in the artifact.
+name: agent-entry-macos-claude-code
+
+on:
+  push:
+    branches: ["agent-entry/macos-claude-code"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-entry-macos-claude-code
+  cancel-in-progress: false
+
+jobs:
+  entry:
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      C: ffa9febec8bb97f4a07f828073ae452b1ff34800
+      C_TREE: d33145b1b8e02ba50bcd7624fdc371362f8c4509
+      PSTACK: 7022c81efb48d8b5eb15498ce6043a3bd74b694c
+      PSTACK_TREE: 975600f2f90dc6f755d58cccdccee27f950edcd2
+      CLAUDE_CODE_VERSION: "2.1.287"
+      DISABLE_AUTOUPDATER: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: transfer
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Runner facts
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          {
+            sw_vers
+            uname -a
+            echo "ImageOS=$ImageOS ImageVersion=$ImageVersion"
+            echo "python: $(command -v python) $(python --version 2>&1)"
+            echo "git: $(command -v git) $(git --version)"
+          } | tee "$RUNNER_TEMP/out/runner.txt"
+      - name: Restore shared C and the pstack pin (read-only https)
+        run: |
+          cd "$RUNNER_TEMP"
+          for pair in "ThijsVanZon/multi-repo-stack shared $C" "cursor/plugins pstack $PSTACK"; do
+            set -- $pair
+            git -c protocol.allow=never -c protocol.https.allow=always clone --quiet --no-checkout \
+              --config core.autocrlf=false "https://github.com/$1.git" "$2"
+            git -C "$2" checkout --quiet --detach "$3"
+          done
+          test "$(git -C shared rev-parse 'HEAD^{tree}')" = "$C_TREE"
+          test "$(git -C pstack rev-parse HEAD:pstack)" = "$PSTACK_TREE"
+          test -z "$(git -C shared status --porcelain --untracked-files=all --ignored)"
+          test -z "$(git -C pstack status --porcelain --untracked-files=all --ignored)"
+      - name: Install Claude Code at the pinned version
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash -s "$CLAUDE_CODE_VERSION"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Prepare the disposable consumer
+        run: >-
+          python -I -B transfer/agent-entry/prepare_consumer.py
+          --shared "$RUNNER_TEMP/shared" --pstack "$RUNNER_TEMP/pstack" --root "$RUNNER_TEMP/entry"
+      - name: Fresh entry and resumed turn
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: python -I -B transfer/agent-entry/run_claude_entry.py --root "$RUNNER_TEMP/entry" --out "$RUNNER_TEMP/out"
+      - name: Collection check (preflight and routed reads stay UNPROVED for raw review)
+        if: always()
+        run: >-
+          python -I -B transfer/agent-entry/check_entry.py --root "$RUNNER_TEMP/entry"
+          --shared "$RUNNER_TEMP/shared" --pstack "$RUNNER_TEMP/pstack" --format claude-stream-json
+          --transcript "$RUNNER_TEMP/out/turn-1.jsonl" --transcript "$RUNNER_TEMP/out/turn-2.jsonl"
+          --out "$RUNNER_TEMP/out/check.json"
+      - name: Gather the evidence
+        if: always()
+        run: cp -R "$RUNNER_TEMP/entry/evidence" "$RUNNER_TEMP/entry/private" "$RUNNER_TEMP/out/"
+      - name: Keep the credential out of the artifact
+        if: always()
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        shell: python
+        run: |
+          import os, pathlib, shutil, sys
+          token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").encode()
+          out = pathlib.Path(os.environ["RUNNER_TEMP"]) / "out"
+          if token and any(token in p.read_bytes() for p in out.rglob("*") if p.is_file()):
+              shutil.rmtree(out)
+              out.mkdir()
+              (out / "withheld.txt").write_text("The credential appeared in the evidence, so nothing else is uploaded.\n")
+              sys.exit(1)
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: agent-entry-macos-claude-code
+          path: ${{ runner.temp }}/out
+          retention-days: 7
+          if-no-files-found: error
